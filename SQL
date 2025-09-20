@@ -1,0 +1,49 @@
+-- This script populates the Performance Management System database with sample data.
+
+-- 1. Insert a manager and employees into the users table.
+--    We are assigning roles here: 'manager' and 'employee'.
+--    The `id` will be generated automatically.
+INSERT INTO users (name, role) VALUES
+('Alex Johnson', 'manager'),
+('Jane Doe', 'employee'),
+('John Smith', 'employee'),
+('Emily White', 'employee'),
+('Chris Evans', 'employee')
+ON CONFLICT DO NOTHING;
+
+-- 2. Insert goals assigned by the manager (Alex Johnson) to employees.
+--    We are using a subquery to find the correct user IDs dynamically.
+INSERT INTO goals (manager_id, employee_id, description, due_date, status) VALUES
+-- Goal for Jane Doe
+((SELECT id FROM users WHERE name = 'Alex Johnson'), (SELECT id FROM users WHERE name = 'Jane Doe'),
+'Increase customer satisfaction score by 15% this quarter by improving response times and implementing a new feedback survey.', '2025-12-31', 'in progress'),
+
+-- Goal for John Smith (completed)
+((SELECT id FROM users WHERE name = 'Alex Johnson'), (SELECT id FROM users WHERE name = 'John Smith'),
+'Complete the web development certification course to enhance front-end skills.', '2025-06-30', 'completed'),
+
+-- Goal for Emily White (draft)
+((SELECT id FROM users WHERE name = 'Alex Johnson'), (SELECT id FROM users WHERE name = 'Emily White'),
+'Draft a comprehensive project plan for the Q4 product launch and present it to the team.', '2025-10-15', 'draft'),
+
+-- Goal for Chris Evans (in progress)
+((SELECT id FROM users WHERE name = 'Alex Johnson'), (SELECT id FROM users WHERE name = 'Chris Evans'),
+'Reduce operational costs by 10% in the third quarter by optimizing resource allocation and reducing waste.', '2025-09-30', 'in progress');
+
+
+-- 3. Insert tasks for the goals.
+--    These represent the steps employees have logged towards their goals.
+INSERT INTO tasks (goal_id, description, status) VALUES
+((SELECT id FROM goals WHERE description LIKE 'Increase customer satisfaction%'), 'Research and select a new customer survey tool.', 'in progress'),
+((SELECT id FROM goals WHERE description LIKE 'Increase customer satisfaction%'), 'Draft an action plan for improving response times.', 'in progress'),
+((SELECT id FROM goals WHERE description LIKE 'Complete the web development%'), 'Completed the first three modules of the course.', 'completed'),
+((SELECT id FROM goals WHERE description LIKE 'Reduce operational costs%'), 'Analyzed current expenditure reports.', 'in progress');
+
+
+-- 4. Insert feedback from the manager.
+--    This feedback is associated with specific goals.
+INSERT INTO feedback (goal_id, manager_id, text) VALUES
+((SELECT id FROM goals WHERE description LIKE 'Complete the web development%'), (SELECT id FROM users WHERE name = 'Alex Johnson'),
+'Excellent progress on the certification, John. Keep up the great work!'),
+((SELECT id FROM goals WHERE description LIKE 'Increase customer satisfaction%'), (SELECT id FROM users WHERE name = 'Alex Johnson'),
+'Good start on the research, Jane. Let''s connect to discuss the options next week.');
