@@ -1,0 +1,410 @@
+import psycopg2
+from psycopg2 import sql
+import datetime
+
+# --- PostgreSQL Connection Configuration ---
+# You need to fill in your PostgreSQL connection details here.
+# NOTE: For security, do not share these details. This is just for local testing.
+DB_HOST = "localhost"
+DB_NAME = "PMS"
+DB_USER = "postgres"
+DB_PASSWORD = "Nidhi$123"
+DB_PORT = "5432"
+
+def get_db_connection():
+    """
+    Establishes and returns a new connection to the PostgreSQL database.
+    """
+    try:
+        conn = psycopg2.connect(
+            host=DB_HOST,
+            database=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            port=DB_PORT
+        )
+        return conn
+    except psycopg2.OperationalError as e:
+        print(f"Error: Could not connect to the database. {e}")
+        return None
+
+# --- Database Schema Setup (CREATE) ---
+def create_tables():
+    """
+    Creates the necessary tables if they don't already exist.
+    This function should be run once to initialize the database schema.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return
+    
+    with conn.cursor() as cur:
+        # Table to store users and their roles (manager/employee)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                role VARCHAR(50) NOT NULL
+            );
+        """)
+        # Table to store goals set for employees
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS goals (
+                id SERIAL PRIMARY KEY,
+                manager_id INT REFERENCES users(id),
+                employee_id INT REFERENCES users(id),
+                description TEXT NOT NULL,
+                due_date DATE NOT NULL,
+                status VARCHAR(50) NOT NULL DEFAULT 'draft',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        # Table to store tasks associated with goals
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                id SERIAL PRIMARY KEY,
+                goal_id INT REFERENCES goals(id),
+                description TEXT NOT NULL,
+                status VARCHAR(50) NOT NULL DEFAULT 'draft',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        # Table to store feedback from managers
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS feedback (
+                id SERIAL PRIMARY KEY,
+                goal_id INT REFERENCES goals(id),
+                manager_id INT REFERENCES users(id),
+                text TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+    conn.commit()
+    conn.close()
+
+# --- GOALS CRUD ---
+
+def create_goal(manager_id, employee_id, description, due_date):
+    """
+    Creates a new goal in the database.
+    """
+    conn = get_db_connection()
+    if not conn: return False
+    
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO goals (manager_id, employee_id, description, due_date)
+                VALUES (%s, %s, %s, %s) RETURNING id;
+            """, (manager_id, employee_id, description, due_date))
+            goal_id = cur.fetchone()[0]
+            conn.commit()
+            return goal_id
+    except psycopg2.Error as e:
+        print(f"Database error while creating goal: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def read_goals(employee_id=None, manager_id=None):
+    """
+    Reads goals from the database.
+    - If employee_id is provided, returns goals for that employee.
+    - If manager_id is provided, returns goals set by that manager.
+    - If neither is provided, returns all goals.
+    """
+    conn = get_db_connection()
+    if not conn: return []
+
+    query = "SELECT * FROM goals"
+    params = []
+    
+    if employee_id:
+        query += " WHERE employee_id = %s"
+        params.append(employee_id)
+    elif manager_id:
+        query += " WHERE manager_id = %s"
+        params.append(manager_id)
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            goals = cur.fetchall()
+            return goals
+    except psycopg2.Error as e:
+        print(f"Database error while reading goals: {e}")
+        return []
+    finally:
+        conn.close()
+
+def update_goal_status(goal_id, new_status):
+    """
+    Updates the status of a specific goal.
+    This action is only available to managers.
+    Simulates a trigger for automated feedback upon completion.
+    """
+    conn = get_db_connection()
+    if not conn: return False
+    
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE goals SET status = %s WHERE id = %s;
+            """, (new_status, goal_id))
+
+            # --- Automated Feedback (Trigger Simulation) ---
+            if new_status == 'completed':
+                cur.execute("""
+                    INSERT INTO feedback (goal_id, manager_id, text)
+                    VALUES (%s, %s, %s);
+                """, (goal_id, 1, "Goal successfully completed! Great work!")) # Manager ID 1 is a placeholder
+
+            conn.commit()
+            return True
+    except psycopg2.Error as e:
+        print(f"Database error while updating goal status: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def delete_goal(goal_id):
+    """
+    Deletes a goal and its associated tasks and feedback.
+    """
+    conn = get_db_connection()
+    if not conn: return False
+    
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM tasks WHERE goal_id = %s;", (goal_id,))
+            cur.execute("DELETE FROM feedback WHERE goal_id = %s;", (goal_id,))
+            cur.execute("DELETE FROM goals WHERE id = %s;", (goal_id,))
+            conn.commit()
+            return True
+    except psycopg2.Error as e:
+        print(f"Database error while deleting goal: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+# --- TASKS CRUD ---
+
+def create_task(goal_id, description):
+    """
+    Creates a new task associated with a goal.
+    """
+    conn = get_db_connection()
+    if not conn: return False
+    
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO tasks (goal_id, description)
+                VALUES (%s, %s);
+            """, (goal_id, description))
+            conn.commit()
+            return True
+    except psycopg2.Error as e:
+        print(f"Database error while creating task: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def read_tasks(goal_id):
+    """
+    Reads all tasks for a specific goal.
+    """
+    conn = get_db_connection()
+    if not conn: return []
+    
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM tasks WHERE goal_id = %s;", (goal_id,))
+            tasks = cur.fetchall()
+            return tasks
+    except psycopg2.Error as e:
+        print(f"Database error while reading tasks: {e}")
+        return []
+    finally:
+        conn.close()
+
+# --- FEEDBACK CRUD ---
+
+def create_feedback(goal_id, manager_id, text):
+    """
+    Adds new feedback to a goal.
+    """
+    conn = get_db_connection()
+    if not conn: return False
+    
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO feedback (goal_id, manager_id, text)
+                VALUES (%s, %s, %s);
+            """, (goal_id, manager_id, text))
+            conn.commit()
+            return True
+    except psycopg2.Error as e:
+        print(f"Database error while creating feedback: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def read_feedback(goal_id):
+    """
+    Reads all feedback for a specific goal.
+    """
+    conn = get_db_connection()
+    if not conn: return []
+    
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM feedback WHERE goal_id = %s;", (goal_id,))
+            feedback = cur.fetchall()
+            return feedback
+    except psycopg2.Error as e:
+        print(f"Database error while reading feedback: {e}")
+        return []
+    finally:
+        conn.close()
+
+# --- USERS CRUD (for application logic) ---
+
+def read_all_employees():
+    """
+    Reads all users with the 'employee' role.
+    """
+    conn = get_db_connection()
+    if not conn: return []
+    
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, name FROM users WHERE role = 'employee';")
+            employees = cur.fetchall()
+            return employees
+    except psycopg2.Error as e:
+        print(f"Database error while reading employees: {e}")
+        return []
+    finally:
+        conn.close()
+
+def read_all_managers():
+    """
+    Reads all users with the 'manager' role.
+    """
+    conn = get_db_connection()
+    if not conn: return []
+    
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, name FROM users WHERE role = 'manager';")
+            managers = cur.fetchall()
+            return managers
+    except psycopg2.Error as e:
+        print(f"Database error while reading managers: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_user_by_id(user_id):
+    """
+    Reads a user's details by their ID.
+    """
+    conn = get_db_connection()
+    if not conn: return None
+    
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, name, role FROM users WHERE id = %s;", (user_id,))
+            user = cur.fetchone()
+            return user
+    except psycopg2.Error as e:
+        print(f"Database error while getting user: {e}")
+        return None
+    finally:
+        conn.close()
+        
+def insert_initial_users():
+    """
+    Initializes a few sample users for the application.
+    This should be run once after tables are created.
+    """
+    conn = get_db_connection()
+    if not conn: return
+    
+    try:
+        with conn.cursor() as cur:
+            # Check if users already exist to avoid duplicates
+            cur.execute("SELECT COUNT(*) FROM users;")
+            if cur.fetchone()[0] == 0:
+                cur.execute("""
+                    INSERT INTO users (name, role) VALUES
+                    ('Jane Doe', 'manager'),
+                    ('John Smith', 'employee'),
+                    ('Emily Chen', 'employee'),
+                    ('Michael Brown', 'employee');
+                """)
+                conn.commit()
+                print("Initial users inserted successfully.")
+    except psycopg2.Error as e:
+        print(f"Database error while inserting initial users: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
+# --- BUSINESS INSIGHTS ---
+
+def get_goal_insights():
+    """
+    Provides business insights on goals using SQL aggregates.
+    - Total goals
+    - Average goals per manager
+    - Number of goals per status
+    - Average days to complete a goal
+    """
+    conn = get_db_connection()
+    if not conn: return {}
+
+    insights = {}
+    try:
+        with conn.cursor() as cur:
+            # Total number of goals
+            cur.execute("SELECT COUNT(*) FROM goals;")
+            insights['total_goals'] = cur.fetchone()[0]
+
+            # Number of goals by status
+            cur.execute("SELECT status, COUNT(*) FROM goals GROUP BY status;")
+            insights['goals_by_status'] = dict(cur.fetchall())
+
+            # Average days to complete a goal (simplistic)
+            cur.execute("SELECT AVG(EXTRACT(epoch FROM (created_at - due_date))) / 86400 FROM goals WHERE status = 'completed';")
+            avg_days = cur.fetchone()[0]
+            insights['avg_days_to_complete'] = round(avg_days, 2) if avg_days else 0
+
+            # Goals per employee
+            cur.execute("""
+                SELECT u.name, COUNT(g.id)
+                FROM goals g JOIN users u ON g.employee_id = u.id
+                GROUP BY u.name;
+            """)
+            insights['goals_per_employee'] = dict(cur.fetchall())
+            
+    except psycopg2.Error as e:
+        print(f"Database error while fetching insights: {e}")
+    finally:
+        conn.close()
+    
+    return insights
+
+if __name__ == '__main__':
+    # This block is for initial setup.
+    print("Initializing database...")
+    create_tables()
+    insert_initial_users()
+    print("Database setup complete.")
